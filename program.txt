@@ -1,0 +1,180 @@
+
+
+use anchor_lang::prelude::*;
+use anchor_spl::{
+    token_2022::{self, MintTo, Token2022},
+    token_interface::{Mint, TokenAccount},
+};
+use anchor_lang::system_program::{self, Transfer as SolTransfer};
+
+declare_id!("6aVUKLFu9QKUEpApA8i1vqP8A3DdJqmebQ7QeYsCs6Lz");
+
+#[program]
+mod storage_anchor {
+    use super::*;
+
+    pub fn initialize(ctx: Context<Initialize>) -> Result<()> {
+        let pda = &mut ctx.accounts.pda_account;
+        pda.store_amount = 0;
+        pda.owner = ctx.accounts.payer.key();
+        pda.bumps = ctx.bumps.pda_account;
+        pda.withdrawal_time = 0;
+        Ok(())
+    }
+
+    pub fn store(ctx: Context<Store>, amount: u64, withdrawal_time: i64) -> Result<()> {
+        require!(amount > 0, StoreError::Invalid);
+
+        let clock = Clock::get()?;
+        let pda = &mut ctx.accounts.pda_account;
+
+        // 1) Transfer SOL from payer -> PDA
+        let cpi_context = CpiContext::new(
+            ctx.accounts.system_program.to_account_info(),
+            SolTransfer {
+                from: ctx.accounts.payer.to_account_info(),
+                to: pda.to_account_info(),
+            },
+        );
+        system_program::transfer(cpi_context, amount)?;
+
+        // 2) Mint Token-2022 tokens -> user's ATA (PDA signs)
+        let payer_key = ctx.accounts.payer.key();
+        let seeds: &[&[u8]] = &[b"client1", payer_key.as_ref(), &[pda.bumps]];
+        let signer = &[seeds];
+
+        let token_ctx = CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            MintTo {
+                mint: ctx.accounts.mint_account.to_account_info(),
+                to: ctx.accounts.token_to.to_account_info(),
+                authority: pda.to_account_info(),
+            },
+            signer,
+        );
+        token_2022::mint_to(token_ctx, amount)?;
+
+        // 3) Update state (overflow-safe)
+        pda.withdrawal_time = clock
+            .unix_timestamp
+            .checked_add(withdrawal_time)
+            .ok_or(StoreError::Overflow)?;
+        pda.store_amount = pda
+            .store_amount
+            .checked_add(amount)
+            .ok_or(StoreError::Overflow)?;
+        Ok(())
+    }
+
+    pub fn withdraw(ctx: Context<Store>, amount: u64) -> Result<()> {
+        require!(amount > 0, StoreError::Invalid);
+
+        let clock = Clock::get()?;
+        let pda = &mut ctx.accounts.pda_account;
+
+        if clock.unix_timestamp < pda.withdrawal_time {
+            return Err(StoreError::TimeNotCompleted.into());
+        }
+
+        let payer_key = ctx.accounts.payer.key();
+        let seeds: &[&[u8]] = &[b"client1", payer_key.as_ref(), &[pda.bumps]];
+        let signer = &[seeds];
+
+        let cpi_context = CpiContext::new_with_signer(
+            ctx.accounts.system_program.to_account_info(),
+            SolTransfer {
+                from: pda.to_account_info(),
+                to: ctx.accounts.payer.to_account_info(),
+            },
+            signer,
+        );
+
+        // Transfer first; update state after, to avoid desync on failure
+        system_program::transfer(cpi_context, amount)?;
+        pda.store_amount = pda
+            .store_amount
+            .checked_sub(amount)
+            .ok_or(StoreError::Underflow)?;
+
+        Ok(())
+    }
+
+    pub fn create_mint(ctx: Context<CreateMint>) -> Result<()> {
+        msg!("Created Mint Account: {:?}", ctx.accounts.mint.key());
+        Ok(())
+    }
+}
+
+#[derive(Accounts)]
+pub struct Initialize<'info> {
+    #[account(
+        init,
+        payer = payer,
+        space = 8 + 32 + 8 + 8 + 1,
+        seeds = [b"client1", payer.key().as_ref()],
+        bump
+    )]
+    pub pda_account: Account<'info, StoreAmount>,
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct Store<'info> {
+    #[account(mut, seeds=[b"client1", payer.key().as_ref()], bump=pda_account.bumps)]
+    pub pda_account: Account<'info, StoreAmount>,
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    pub system_program: Program<'info, System>,
+
+    // IMPORTANT: Token-2022 program
+    pub token_program: Program<'info, Token2022>,
+
+    // Use InterfaceAccount<> for token_interface types
+    #[account(mut)]
+    pub mint_account: InterfaceAccount<'info, Mint>,
+    #[account(mut)]
+    pub token_to: InterfaceAccount<'info, TokenAccount>,
+}
+
+#[derive(Accounts)]
+pub struct CreateMint<'info> {
+    #[account(mut)]
+    pub signer: Signer<'info>,
+
+    #[account(
+        seeds = [b"client1", signer.key().as_ref()],
+        bump = pda_account.bumps
+    )]
+    pub pda_account: Account<'info, StoreAmount>,
+
+    #[account(
+        init,
+        payer = signer,
+        mint::decimals = 6,
+        mint::authority = pda_account.key(),
+        mint::freeze_authority = pda_account.key(),
+    )]
+    pub mint: InterfaceAccount<'info, Mint>,
+
+    pub token_program: Program<'info, Token2022>,
+    pub system_program: Program<'info, System>,
+}
+
+
+#[account]
+pub struct StoreAmount {
+    pub owner: Pubkey,
+    pub store_amount: u64,
+    pub withdrawal_time: i64,
+    pub bumps: u8,
+}
+
+#[error_code]
+pub enum StoreError {
+    Overflow,
+    Underflow,
+    Invalid,
+    TimeNotCompleted,
+}
