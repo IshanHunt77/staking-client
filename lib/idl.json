@@ -1,0 +1,70 @@
+{
+  "version": "0.1.0",
+  "name": "storage_anchor",
+  "instructions": [
+    {
+      "name": "initialize",
+      "accounts": [
+        { "name": "pdaAccount", "isMut": true, "isSigner": false },
+        { "name": "payer", "isMut": true, "isSigner": true },
+        { "name": "systemProgram", "isMut": false, "isSigner": false }
+      ],
+      "args": []
+    },
+    {
+      "name": "store",
+      "accounts": [
+        { "name": "pdaAccount", "isMut": true, "isSigner": false },
+        { "name": "payer", "isMut": true, "isSigner": true },
+        { "name": "systemProgram", "isMut": false, "isSigner": false },
+        { "name": "tokenProgram", "isMut": false, "isSigner": false },
+        { "name": "mintAccount", "isMut": true, "isSigner": false },
+        { "name": "tokenTo", "isMut": true, "isSigner": false }
+      ],
+      "args": [{ "name": "amount", "type": "u64" }, { "name": "withdrawalTime", "type": "i64" }]
+    },
+    {
+      "name": "withdraw",
+      "accounts": [
+        { "name": "pdaAccount", "isMut": true, "isSigner": false },
+        { "name": "payer", "isMut": true, "isSigner": true },
+        { "name": "systemProgram", "isMut": false, "isSigner": false },
+        { "name": "tokenProgram", "isMut": false, "isSigner": false },
+        { "name": "mintAccount", "isMut": true, "isSigner": false },
+        { "name": "tokenTo", "isMut": true, "isSigner": false }
+      ],
+      "args": [{ "name": "amount", "type": "u64" }]
+    },
+    {
+      "name": "createMint",
+      "accounts": [
+        { "name": "signer", "isMut": true, "isSigner": true },
+        { "name": "pdaAccount", "isMut": false, "isSigner": false },
+        { "name": "mint", "isMut": true, "isSigner": true },
+        { "name": "tokenProgram", "isMut": false, "isSigner": false },
+        { "name": "systemProgram", "isMut": false, "isSigner": false }
+      ],
+      "args": []
+    }
+  ],
+  "accounts": [
+    {
+      "name": "StoreAmount",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "owner", "type": "publicKey" },
+          { "name": "storeAmount", "type": "u64" },
+          { "name": "withdrawalTime", "type": "i64" },
+          { "name": "bumps", "type": "u8" }
+        ]
+      }
+    }
+  ],
+  "errors": [
+    { "code": 6000, "name": "Overflow" },
+    { "code": 6001, "name": "Underflow" },
+    { "code": 6002, "name": "Invalid" },
+    { "code": 6003, "name": "TimeNotCompleted" }
+  ]
+}
